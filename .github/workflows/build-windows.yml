@@ -1,0 +1,64 @@
+name: Build Windows x64
+
+on:
+  workflow_dispatch:
+    inputs:
+      component:
+        description: Component to build and verify
+        type: choice
+        default: all
+        options: [all, skia, harfbuzz, angle]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}-${{ inputs.component }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore native build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .build/win-x64
+          key: native-v1-win-x64-${{ hashFiles('config/versions.json') }}-${{ inputs.component }}-${{ github.run_id }}
+          restore-keys: native-v1-win-x64-${{ hashFiles('config/versions.json') }}-${{ inputs.component }}-
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Install pinned LLVM
+        if: inputs.component == 'all' || inputs.component == 'skia'
+        shell: pwsh
+        run: ./scripts/setup-windows.ps1
+      - name: Install Ninja
+        run: python -m pip install ninja==1.13.0
+      - name: Check build configuration
+        run: python -m unittest discover -s tests -p 'test_*.py'
+      - name: Build and verify static libraries
+        env:
+          COMPONENT: ${{ inputs.component }}
+        shell: pwsh
+        run: |
+          python scripts/build.py --rid win-x64 --component "$env:COMPONENT"
+          if ($LASTEXITCODE -ne 0) { throw 'Windows native build or verification failed.' }
+      - name: Upload Windows libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: avalonia-native-win-x64-${{ inputs.component }}
+          path: artifacts/avalonia-native-win-x64-${{ inputs.component }}.zip
+          if-no-files-found: error
+          retention-days: 7
+      - name: Save native build cache
+        if: always() && !cancelled()
+        uses: actions/cache/save@v4
+        with:
+          path: .build/win-x64
+          key: native-v1-win-x64-${{ hashFiles('config/versions.json') }}-${{ inputs.component }}-${{ github.run_id }}

@@ -1,0 +1,34 @@
+{
+  "skia": {
+    "version": "2.88.9",
+    "repository": "https://github.com/mono/skia.git",
+    "revision": "4bed689c9c9eb77a120c6a9d54af6a572c85d1c2",
+    "binding_revision": "9699cdf046a989423a5e5eca68e7fd813486d81c"
+  },
+  "harfbuzz": {
+    "version": "8.3.1",
+    "binding_version": "8.3.1.1",
+    "repository": "https://github.com/harfbuzz/harfbuzz.git",
+    "revision": "2b3631a866b3077d9d675caa4ec9010b342b5a7c"
+  },
+  "angle": {
+    "version": "chromium/7151",
+    "repository": "https://github.com/google/angle.git",
+    "revision": "df9c59dcacff7d186d00e3263a1aa68f8059137c"
+  },
+  "avalonia": {
+    "version": "11.3.12",
+    "repository": "https://github.com/AvaloniaUI/Avalonia.git",
+    "revision": "37fbd9655cc581ff5b1c6b1fb1be4e3118c889d0"
+  },
+  "depot_tools": {
+    "repository": "https://chromium.googlesource.com/chromium/tools/depot_tools.git",
+    "revision": "1b0972d3d5e5b1e78055147cb3576361e274b9ed"
+  },
+  "llvm": {
+    "version": "21.1.8",
+    "windows_installer": "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/LLVM-21.1.8-win64.exe",
+    "sha256": "7a5386c26497db1691f320121e5b113364dd0274b98e55f15f4dbc00c0450113"
+  },
+  "macos_deployment_target": "14.0"
+}
