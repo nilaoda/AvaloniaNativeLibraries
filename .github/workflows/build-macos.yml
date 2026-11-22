@@ -1,8 +1,14 @@
-name: Build macOS arm64
+name: Build macOS
+run-name: ${{ github.workflow }} ${{ inputs.architecture }} (${{ inputs.component }})
 
 on:
   workflow_dispatch:
     inputs:
+      architecture:
+        description: Target architecture
+        type: choice
+        default: arm64
+        options: [arm64, x64]
       component:
         description: Component to build and verify
         type: choice
@@ -13,23 +19,24 @@ permissions:
   contents: read
 
 concurrency:
-  group: macos-${{ github.ref }}-${{ inputs.component }}
+  group: macos-${{ github.ref }}-${{ inputs.architecture }}-${{ inputs.component }}
   cancel-in-progress: false
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: ${{ inputs.architecture == 'x64' && 'macos-15-intel' || 'macos-15' }}
     timeout-minutes: 180
     env:
+      RID: osx-${{ inputs.architecture }}
       MACOSX_DEPLOYMENT_TARGET: '14.0'
     steps:
       - uses: actions/checkout@v4
       - name: Restore native build cache
         uses: actions/cache/restore@v4
         with:
-          path: .build/osx-arm64
-          key: native-v1-osx-arm64-${{ hashFiles('config/versions.json') }}-${{ inputs.component }}-${{ github.run_id }}
-          restore-keys: native-v1-osx-arm64-${{ hashFiles('config/versions.json') }}-${{ inputs.component }}-
+          path: .build/${{ env.RID }}
+          key: native-v2-${{ env.RID }}-${{ hashFiles('config/versions.json') }}-${{ inputs.component }}-${{ github.run_id }}
+          restore-keys: native-v2-${{ env.RID }}-${{ hashFiles('config/versions.json') }}-${{ inputs.component }}-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -40,24 +47,25 @@ jobs:
       - name: Install build tools
         run: |
           python -m pip install ninja==1.13.0
-          # Skia m88 pins an Intel GN binary; compilation still targets arm64.
-          sudo softwareupdate --install-rosetta --agree-to-license
+      - name: Install Rosetta for the pinned Intel GN
+        if: inputs.architecture == 'arm64'
+        run: sudo softwareupdate --install-rosetta --agree-to-license
       - name: Check build configuration
         run: python -m unittest discover -s tests -p 'test_*.py'
       - name: Build and verify static libraries
         env:
           COMPONENT: ${{ inputs.component }}
-        run: python scripts/build.py --rid osx-arm64 --component "$COMPONENT"
+        run: python scripts/build.py --rid "$RID" --component "$COMPONENT"
       - name: Upload macOS libraries
         uses: actions/upload-artifact@v4
         with:
-          name: avalonia-native-osx-arm64-${{ inputs.component }}
-          path: artifacts/avalonia-native-osx-arm64-${{ inputs.component }}.zip
+          name: avalonia-native-${{ env.RID }}-${{ inputs.component }}
+          path: artifacts/avalonia-native-${{ env.RID }}-${{ inputs.component }}.zip
           if-no-files-found: error
           retention-days: 7
       - name: Save native build cache
         if: always() && !cancelled()
         uses: actions/cache/save@v4
         with:
-          path: .build/osx-arm64
-          key: native-v1-osx-arm64-${{ hashFiles('config/versions.json') }}-${{ inputs.component }}-${{ github.run_id }}
+          path: .build/${{ env.RID }}
+          key: native-v2-${{ env.RID }}-${{ hashFiles('config/versions.json') }}-${{ inputs.component }}-${{ github.run_id }}

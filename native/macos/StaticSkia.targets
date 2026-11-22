@@ -1,0 +1,34 @@
+<Project>
+  <PropertyGroup Condition="'$(PublishAot)' == 'true' And $(RuntimeIdentifier.StartsWith('osx-'))">
+    <_StaticSkiaEnabled>true</_StaticSkiaEnabled>
+    <_StaticSkiaSource>$(MSBuildThisFileDirectory)StaticSkiaLoader.c</_StaticSkiaSource>
+    <_StaticSkiaDirectory>$(IntermediateOutputPath)static-skia/</_StaticSkiaDirectory>
+    <_StaticSkiaObject>$(_StaticSkiaDirectory)loader.o</_StaticSkiaObject>
+    <_StaticSkiaArchitecture Condition="'$(RuntimeIdentifier)' == 'osx-arm64'">arm64</_StaticSkiaArchitecture>
+    <_StaticSkiaArchitecture Condition="'$(RuntimeIdentifier)' == 'osx-x64'">x86_64</_StaticSkiaArchitecture>
+    <_StaticSkiaMinOS Condition="'$(AppleMinOSVersion)' != ''">$(AppleMinOSVersion)</_StaticSkiaMinOS>
+    <_StaticSkiaMinOS Condition="'$(_StaticSkiaMinOS)' == ''">14.0</_StaticSkiaMinOS>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(_StaticSkiaEnabled)' == 'true'">
+    <NativeLibrary Include="$(_StaticSkiaObject)" />
+  </ItemGroup>
+  <!-- 保持 Metal 渲染路径，将 Skia 的显式加载请求解析到可执行文件。 -->
+  <Target Name="BuildStaticSkiaLoader" BeforeTargets="PrepareForBuild"
+          Condition="'$(_StaticSkiaEnabled)' == 'true'" Inputs="$(_StaticSkiaSource)" Outputs="$(_StaticSkiaObject)">
+    <Error Condition="'$(_StaticSkiaArchitecture)' == ''" Text="Static Skia loading requires osx-arm64 or osx-x64." />
+    <MakeDir Directories="$(_StaticSkiaDirectory)" />
+    <Exec WorkingDirectory="$(MSBuildProjectDirectory)"
+          Command="xcrun clang -c -O2 -arch $(_StaticSkiaArchitecture) -mmacosx-version-min=$(_StaticSkiaMinOS) &quot;$(_StaticSkiaSource)&quot; -o &quot;$(_StaticSkiaObject)&quot;" />
+  </Target>
+  <Target Name="ExportStaticSkiaMetalEntryPoints" BeforeTargets="LinkNative" Condition="'$(_StaticSkiaEnabled)' == 'true'">
+    <Error Condition="!Exists('$(ExportsFile)')" Text="The NativeAOT export file is missing." />
+    <ReadLinesFromFile File="$(ExportsFile)">
+      <Output TaskParameter="Lines" ItemName="_StaticSkiaExistingExports" />
+    </ReadLinesFromFile>
+    <ItemGroup>
+      <_StaticSkiaMetalExport Include="_gr_direct_context_make_metal_with_options;_gr_backendrendertarget_new_metal" Exclude="@(_StaticSkiaExistingExports)" />
+      <LinkerArg Include="-Wl,-u,_gr_direct_context_make_metal_with_options;-Wl,-u,_gr_backendrendertarget_new_metal" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(ExportsFile)" Lines="@(_StaticSkiaMetalExport)" Overwrite="false" />
+  </Target>
+</Project>

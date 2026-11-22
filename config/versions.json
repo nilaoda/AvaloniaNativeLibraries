@@ -17,9 +17,13 @@
     "revision": "df9c59dcacff7d186d00e3263a1aa68f8059137c"
   },
   "avalonia": {
-    "version": "11.3.12",
+    "version": "11.3.23",
     "repository": "https://github.com/AvaloniaUI/Avalonia.git",
-    "revision": "37fbd9655cc581ff5b1c6b1fb1be4e3118c889d0"
+    "revision": "03bd7e694d8ae1247663b8a9a36f536f785c2bd3"
+  },
+  "gn": {
+    "repository": "https://gn.googlesource.com/gn",
+    "revision": "9e993e3da82a9f4bc5c50c190afbcffd61e3d9e0"
   },
   "depot_tools": {
     "repository": "https://chromium.googlesource.com/chromium/tools/depot_tools.git",
@@ -29,6 +33,11 @@
     "version": "21.1.8",
     "windows_installer": "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/LLVM-21.1.8-win64.exe",
     "sha256": "7a5386c26497db1691f320121e5b113364dd0274b98e55f15f4dbc00c0450113"
+  },
+  "llvm_arm64": {
+    "version": "22.1.8",
+    "windows_installer": "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/LLVM-22.1.8-woa64.exe",
+    "sha256": "76f44ef1ba6eeb5a65904e9500f042f588fade49952778ce48f0374daa934396"
   },
   "macos_deployment_target": "14.0"
 }

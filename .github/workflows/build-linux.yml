@@ -1,8 +1,14 @@
-name: Build Linux x64
+name: Build Linux
+run-name: ${{ github.workflow }} ${{ inputs.architecture }} (${{ inputs.component }})
 
 on:
   workflow_dispatch:
     inputs:
+      architecture:
+        description: Target architecture
+        type: choice
+        default: x64
+        options: [x64, arm64]
       component:
         description: Component to build and verify
         type: choice
@@ -13,45 +19,47 @@ permissions:
   contents: read
 
 concurrency:
-  group: linux-${{ github.ref }}-${{ inputs.component }}
+  group: linux-${{ github.ref }}-${{ inputs.architecture }}-${{ inputs.component }}
   cancel-in-progress: false
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 180
+    env:
+      RID: linux-${{ inputs.architecture }}
     steps:
       - uses: actions/checkout@v4
       - name: Restore native build cache
         uses: actions/cache/restore@v4
         with:
-          path: .build/linux-x64
-          key: native-v1-linux-x64-${{ hashFiles('config/versions.json') }}-${{ inputs.component }}-${{ github.run_id }}
-          restore-keys: native-v1-linux-x64-${{ hashFiles('config/versions.json') }}-${{ inputs.component }}-
+          path: .build/${{ env.RID }}
+          key: native-v2-${{ env.RID }}-${{ hashFiles('config/versions.json') }}-${{ inputs.component }}-${{ github.run_id }}
+          restore-keys: native-v2-${{ env.RID }}-${{ hashFiles('config/versions.json') }}-${{ inputs.component }}-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang binutils pkg-config libfontconfig1-dev libfreetype-dev libgl1-mesa-dev libegl1-mesa-dev
+          sudo apt-get install -y build-essential clang binutils pkg-config libfontconfig1-dev libfreetype-dev libgl1-mesa-dev libegl1-mesa-dev libexpat1-dev libbrotli-dev libbz2-dev libpng-dev
           python -m pip install ninja==1.13.0
       - name: Check build configuration
         run: python -m unittest discover -s tests -p 'test_*.py'
       - name: Build and verify static libraries
         env:
           COMPONENT: ${{ inputs.component }}
-        run: python scripts/build.py --rid linux-x64 --component "$COMPONENT"
+        run: python scripts/build.py --rid "$RID" --component "$COMPONENT"
       - name: Upload Linux libraries
         uses: actions/upload-artifact@v4
         with:
-          name: avalonia-native-linux-x64-${{ inputs.component }}
-          path: artifacts/avalonia-native-linux-x64-${{ inputs.component }}.zip
+          name: avalonia-native-${{ env.RID }}-${{ inputs.component }}
+          path: artifacts/avalonia-native-${{ env.RID }}-${{ inputs.component }}.zip
           if-no-files-found: error
           retention-days: 7
       - name: Save native build cache
         if: always() && !cancelled()
         uses: actions/cache/save@v4
         with:
-          path: .build/linux-x64
-          key: native-v1-linux-x64-${{ hashFiles('config/versions.json') }}-${{ inputs.component }}-${{ github.run_id }}
+          path: .build/${{ env.RID }}
+          key: native-v2-${{ env.RID }}-${{ hashFiles('config/versions.json') }}-${{ inputs.component }}-${{ github.run_id }}

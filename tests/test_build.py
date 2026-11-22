@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import struct
 from pathlib import Path
 import tempfile
 import unittest
@@ -28,10 +29,12 @@ class BuildConfigurationTests(unittest.TestCase):
             arguments = build.skia_arguments(rid, self.versions)
             self.assertTrue(arguments["is_static_skiasharp"])
             self.assertTrue(arguments["skia_enable_gpu"])
-            if rid == "win-x64":
+            if rid.startswith("win-"):
                 self.assertNotIn("skia_use_system_freetype2", arguments)
             else:
                 self.assertFalse(arguments["skia_use_system_freetype2"])
+        for rid in build.COMPONENTS:
+            self.assertEqual(rid.split("-")[1], build.skia_arguments(rid, self.versions)["target_cpu"])
         mac = build.skia_arguments("osx-arm64", self.versions)
         self.assertEqual("arm64", mac["target_cpu"])
         self.assertEqual("14.0", mac["min_macos_version"])
@@ -49,6 +52,58 @@ class BuildConfigurationTests(unittest.TestCase):
             self.assertIn(b'complete_static_lib = true', first[0])
             self.assertNotIn(b'third_party/dawn', first[1])
             self.assertIn(b"'required': 'keep'", first[1])
+
+    def test_angle_arm64_uses_installed_runtime_family(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            script = source / "build/vs_toolchain.py"
+            script.parent.mkdir()
+            script.write_bytes(b"MSVC_TOOLSET_VERSION = {\r\n    '2022': 'VC143',\r\n}\r\n")
+            for version, family in (("14.9.1", "VC143"), ("14.52.37025", "VC145")):
+                runtime = source / "VC/Redist/MSVC" / version / "arm64" / f"Microsoft.{family}.CRT"
+                runtime.mkdir(parents=True)
+                (runtime / "msvcp140.dll").touch()
+            build.patch_angle_arm64_toolset(source, source)
+            expected = b"MSVC_TOOLSET_VERSION = {\r\n    '2022': 'VC145',\r\n}\r\n"
+            self.assertEqual(expected, script.read_bytes())
+            build.patch_angle_arm64_toolset(source, source)
+            self.assertEqual(expected, script.read_bytes())
+
+    def test_archive_architecture_accepts_target_and_rejects_mixed_objects(self):
+        def member(machine):
+            body = machine.to_bytes(2, "little") + bytes(18)
+            header = f"{'test.obj/':<16}{0:<12}{0:<6}{0:<6}{644:<8}{len(body):<10}`\n".encode()
+            return header + body
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "test.lib"
+            path.write_bytes(b"!<arch>\n" + member(0xaa64))
+            build.verify_archive_architecture(path, "win-arm64")
+            with self.assertRaises(ValueError):
+                build.verify_archive_architecture(path, "win-x64")
+            path.write_bytes(b"!<arch>\n" + member(0xaa64) + member(0x8664))
+            with self.assertRaises(ValueError):
+                build.verify_archive_architecture(path, "win-arm64")
+
+    def test_metal_exports_only_change_the_two_selected_visibility_flags(self):
+        names = [b"_gr_direct_context_make_metal_with_options", b"_gr_backendrendertarget_new_metal", b"_unrelated"]
+        strings = b"\0"
+        symbols = b""
+        for name in names:
+            symbols += struct.pack("<IBBHQ", len(strings), 0x1f, 1, 0, 0)
+            strings += name + b"\0"
+        obj = struct.pack("<8I", 0xfeedfacf, 0x100000c, 0, 1, 1, 24, 0, 0)
+        obj += struct.pack("<6I", 2, 24, 56, len(names), 56 + len(symbols), len(strings))
+        obj += symbols + strings
+        header = f"{'test.o/':<16}{0:<12}{0:<6}{0:<6}{644:<8}{len(obj):<10}`\n".encode()
+        original = b"!<arch>\n" + header + obj + (b"\n" if len(obj) % 2 else b"")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "libskia.a"
+            path.write_bytes(original)
+            self.assertTrue(build.expose_metal_entry_points(path))
+            updated = path.read_bytes()
+            self.assertEqual(2, sum(a != b for a, b in zip(original, updated)))
+            self.assertFalse(build.expose_metal_entry_points(path))
+            self.assertEqual(updated, path.read_bytes())
 
     def test_thin_archive_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

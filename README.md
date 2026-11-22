@@ -11,10 +11,10 @@ versions, source revisions and supported targets.
 
 | Avalonia | SkiaSharp | HarfBuzzSharp | ANGLE | Status |
 | --- | --- | --- | --- | --- |
-| 11.3.12 | 2.88.9 | 8.3.1.1 | chromium/7151 (Windows) | Native builds and application NativeAOT checks passed on all three targets |
+| 11.3.23 | 2.88.9 | 8.3.1.1 | chromium/7151 (Windows) | Native builds and application NativeAOT checks passed on all six targets |
 | 12 | To be selected | To be selected | To be selected | Planned |
 
-The current SDK profile uses Avalonia.Native 11.3.12 on macOS. Match the
+The current SDK profile uses Avalonia.Native 11.3.23 on macOS. Match the
 application's managed binding versions to the combination listed in its SDK
 release. Additional Avalonia versions will be listed after their dependency
 builds and application integration have been verified.
@@ -26,21 +26,23 @@ uses HarfBuzz 8.3.1.
 
 | Workflow | Target | Components |
 | --- | --- | --- |
-| Build Windows x64 | Windows x64 | SkiaSharp, HarfBuzzSharp, ANGLE |
-| Build Linux x64 | x64, built on Ubuntu 24.04 | SkiaSharp, HarfBuzzSharp |
-| Build macOS arm64 | macOS 14+, arm64 | SkiaSharp, HarfBuzzSharp, Avalonia.Native |
+| Build Windows | Windows x64 and ARM64 | SkiaSharp, HarfBuzzSharp, ANGLE |
+| Build Linux | x64 and ARM64, built on Ubuntu 24.04 | SkiaSharp, HarfBuzzSharp |
+| Build macOS | macOS 14+, arm64 and x64 | SkiaSharp, HarfBuzzSharp, Avalonia.Native |
 
-Run each workflow independently from Actions. Select `all` or a single component
+Run each workflow independently from Actions. Select an architecture and `all` or a single component
 to build. Workflows upload their own ZIP artifacts and do not publish releases.
 
 ## Releases
 
 Release tags identify the Avalonia version and build date, for example
-`avalonia-11.3.12-20261122`.
+`avalonia-11.3.23-20261122`.
 
 Each platform ZIP includes static libraries, licenses and a `manifest.json`
 with exact versions, source revisions, library checksums and system link
-requirements. ZIP checksums are provided in `SHA256SUMS`.
+requirements. macOS ZIPs also include `build/StaticSkia.targets`; import it
+when statically linking Avalonia 11.3.23 to preserve the Metal rendering path.
+ZIP checksums are provided in `SHA256SUMS`.
 
 Native build checks and application-level NativeAOT, GUI and GPU validation
 are performed separately.
@@ -60,8 +62,10 @@ then run on the target OS:
 python scripts/build.py --rid linux-x64 --component all
 ```
 
-Windows builds require an MSVC developer shell and LLVM 21.1.8. macOS builds
-require Xcode and Rosetta for the Intel GN binary pinned by Skia m88. Generated
+Build on the matching target OS and CPU architecture. Windows builds require
+an MSVC developer shell and LLVM 21.1.8 for x64 or 22.1.8 for ARM64. macOS
+builds require Xcode; ARM64 hosts also need Rosetta for the pinned Intel GN.
+Linux ARM64 builds compile the pinned GN source with the host toolchain. Generated
 sources and build outputs live under `.build/` and `artifacts/` and are ignored
 by Git. Before rebuilding the same target/component, move aside its previous
 `artifacts/<rid>-<component>/` directory.
