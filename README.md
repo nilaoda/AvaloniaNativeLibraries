@@ -1,29 +1,51 @@
 # AvaloniaNativeLibraries
 
-Version-pinned native static libraries for Avalonia NativeAOT applications.
+Version-pinned native static libraries for Avalonia desktop applications on
+Windows, Linux and macOS.
+
+Builds and packages SkiaSharp, HarfBuzzSharp, ANGLE and Avalonia.Native for
+desktop NativeAOT applications. Each release records the exact dependency
+versions, source revisions and supported targets.
+
+## Compatibility
+
+| Avalonia | SkiaSharp | HarfBuzzSharp | ANGLE | Status |
+| --- | --- | --- | --- | --- |
+| 11.3.12 | 2.88.9 | 8.3.1.1 | chromium/7151 (Windows) | Native builds and application NativeAOT checks passed on all three targets |
+| 12 | To be selected | To be selected | To be selected | Planned |
+
+The current SDK profile uses Avalonia.Native 11.3.12 on macOS. Match the
+application's managed binding versions to the combination listed in its SDK
+release. Additional Avalonia versions will be listed after their dependency
+builds and application integration have been verified.
+
+Source revisions are pinned in `config/versions.json`. HarfBuzzSharp 8.3.1.1
+uses HarfBuzz 8.3.1.
+
+## Platforms
 
 | Workflow | Target | Components |
 | --- | --- | --- |
-| Build Windows x64 | Windows x64 | SkiaSharp 2.88.9, HarfBuzzSharp 8.3.1.1, ANGLE chromium/7151 |
-| Build Linux x64 | Ubuntu 24.04, x64 | SkiaSharp 2.88.9, HarfBuzzSharp 8.3.1.1 |
-| Build macOS arm64 | macOS 14+, arm64 | SkiaSharp 2.88.9, HarfBuzzSharp 8.3.1.1, Avalonia.Native 11.3.12 |
+| Build Windows x64 | Windows x64 | SkiaSharp, HarfBuzzSharp, ANGLE |
+| Build Linux x64 | x64, built on Ubuntu 24.04 | SkiaSharp, HarfBuzzSharp |
+| Build macOS arm64 | macOS 14+, arm64 | SkiaSharp, HarfBuzzSharp, Avalonia.Native |
 
 Run each workflow independently from Actions. Select `all` or a single component
 to build. Workflows upload their own ZIP artifacts and do not publish releases.
 
-Source revisions are defined in `config/versions.json`. HarfBuzzSharp 8.3.1.1
-uses HarfBuzz 8.3.1; its native implementation is built from the same upstream
-commit recorded in SkiaSharp 3.119.0's dependency manifest.
+## Releases
 
-Each ZIP contains static archives in `lib/`, source/license information, a
-`manifest.json` with source revisions, library SHA-256 checksums and required
-system link dependencies. System frameworks and graphics drivers remain
-provided by the target OS; Linux's fontconfig dependency is also recorded.
+Release tags identify the Avalonia version and build date, for example
+`avalonia-11.3.12-20261122`.
 
-The build links and runs a small native executable against the selected
-libraries, checks versions and initialization, and checks its dynamic imports.
-This does not replace application-level NativeAOT, GUI or GPU playback testing.
-Application integration and GUI verification remain separate steps.
+Each platform ZIP includes static libraries, licenses and a `manifest.json`
+with exact versions, source revisions, library checksums and system link
+requirements. ZIP checksums are provided in `SHA256SUMS`.
+
+Native build checks and application-level NativeAOT, GUI and GPU validation
+are performed separately.
+
+## Building
 
 To inspect the build plan without downloading or compiling:
 
