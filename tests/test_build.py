@@ -53,6 +53,54 @@ class BuildConfigurationTests(unittest.TestCase):
             self.assertNotIn(b'third_party/dawn', first[1])
             self.assertIn(b"'required': 'keep'", first[1])
 
+    def test_angle_input_layout_key_has_no_implicit_padding(self):
+        header = ("#include <array>\n#include <map>\n\n"
+                  "struct PackedAttributeLayout\n{\n"
+                  "    PackedAttributeLayout();\n"
+                  "    PackedAttributeLayout(const PackedAttributeLayout &other);\n\n"
+                  "    bool operator==(const PackedAttributeLayout &other) const;\n\n"
+                  "    uint32_t numAttributes;\n"
+                  "    gl::AttribArray<uint64_t> attributeData;\n"
+                  "};\n")
+        unit = ("}  // anonymous namespace\n\n"
+                "PackedAttributeLayout::PackedAttributeLayout() : numAttributes(0), attributeData({}) {}\n\n"
+                "PackedAttributeLayout::PackedAttributeLayout(const PackedAttributeLayout &other) = default;\n\n"
+                "void PackedAttributeLayout::addAttributeData()\n")
+        for newline in (b"\n", b"\r\n"):
+            with tempfile.TemporaryDirectory() as directory:
+                source = Path(directory)
+                folder = source / "src/libANGLE/renderer/d3d/d3d11"
+                folder.mkdir(parents=True)
+                (folder / "InputLayoutCache.h").write_bytes(header.encode().replace(b"\n", newline))
+                (folder / "InputLayoutCache.cpp").write_bytes(unit.encode().replace(b"\n", newline))
+                build.patch_angle_input_layout_key(source)
+                first = (folder / "InputLayoutCache.h").read_bytes(), (folder / "InputLayoutCache.cpp").read_bytes()
+                build.patch_angle_input_layout_key(source)
+                self.assertEqual(first, ((folder / "InputLayoutCache.h").read_bytes(),
+                                         (folder / "InputLayoutCache.cpp").read_bytes()))
+                self.assertIn(b"    uint32_t pad0                           = 0;" + newline, first[0])
+                self.assertIn(b"#include <map>" + newline + b"#include <type_traits>" + newline, first[0])
+                self.assertIn(b"static_assert(std::has_unique_object_representations_v<PackedAttributeLayout>,", first[0])
+                self.assertNotIn(b"PackedAttributeLayout();", first[0])
+                self.assertNotIn(b"PackedAttributeLayout::PackedAttributeLayout(", first[1])
+                self.assertIn(b"void PackedAttributeLayout::addAttributeData()", first[1])
+                if newline == b"\r\n":
+                    self.assertNotIn(b"\n", first[0].replace(b"\r\n", b""))
+
+    def test_angle_input_layout_key_patch_rejects_other_revisions_without_writing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            folder = source / "src/libANGLE/renderer/d3d/d3d11"
+            folder.mkdir(parents=True)
+            header = b"struct PackedAttributeLayout\n{\n    uint32_t numAttributes;\n};\n"
+            unit = b"PackedAttributeLayout::PackedAttributeLayout() : numAttributes(0) {}\n"
+            (folder / "InputLayoutCache.h").write_bytes(header)
+            (folder / "InputLayoutCache.cpp").write_bytes(unit)
+            with self.assertRaises(ValueError):
+                build.patch_angle_input_layout_key(source)
+            self.assertEqual(header, (folder / "InputLayoutCache.h").read_bytes())
+            self.assertEqual(unit, (folder / "InputLayoutCache.cpp").read_bytes())
+
     def test_angle_arm64_uses_installed_runtime_family(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory)

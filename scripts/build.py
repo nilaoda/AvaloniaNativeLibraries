@@ -316,6 +316,53 @@ def patch_angle(source):
     deps_file.write_text(deps, encoding="utf-8")
 
 
+def patch_angle_input_layout_key(source):
+    # 输入布局缓存按原始内存对 PackedAttributeLayout 计算哈希，相等比较却不含 numAttributes
+    # 之后的 4 字节隐式填充，构造和拷贝也都不写这段填充。逻辑相同的键因此哈希不同，缓存淘汰时
+    # 索引项删不掉，之后会返回已析构的输入布局。这里改为显式置零的填充字段，与上游 ANGLE 提交
+    # bbf320aa343f7cb9b3dff790828b258710b3c20f 一致，并用 static_assert 防止再出现隐式填充。
+    directory = source / "src/libANGLE/renderer/d3d/d3d11"
+    patches = (
+        (directory / "InputLayoutCache.h", b"uint32_t pad0", (
+            ("#include <map>\n", "#include <map>\n#include <type_traits>\n"),
+            ("    PackedAttributeLayout();\n"
+             "    PackedAttributeLayout(const PackedAttributeLayout &other);\n\n", ""),
+            ("    uint32_t numAttributes;\n"
+             "    gl::AttribArray<uint64_t> attributeData;\n"
+             "};\n",
+             "    uint32_t numAttributes                  = 0;\n"
+             "    uint32_t pad0                           = 0;\n"
+             "    gl::AttribArray<uint64_t> attributeData = {0};\n"
+             "};\n\n"
+             "static_assert(std::has_unique_object_representations_v<PackedAttributeLayout>,\n"
+             "              \"PackedAttributeLayout is hashed as raw memory and must not contain padding\");\n"),
+        )),
+        (directory / "InputLayoutCache.cpp", None, (
+            ("PackedAttributeLayout::PackedAttributeLayout() : numAttributes(0), attributeData({}) {}\n\n"
+             "PackedAttributeLayout::PackedAttributeLayout(const PackedAttributeLayout &other) = default;\n\n", ""),
+        )),
+    )
+    updates = []
+    for path, applied_marker, replacements in patches:
+        data = path.read_bytes()
+        if applied_marker is None:
+            applied = b"PackedAttributeLayout::PackedAttributeLayout(" not in data
+        else:
+            applied = applied_marker in data
+        if applied:
+            continue
+        newline = b"\r\n" if b"\r\n" in data else b"\n"
+        for old, new in replacements:
+            old, new = (value.encode("ascii").replace(b"\n", newline) for value in (old, new))
+            if data.count(old) != 1:
+                raise ValueError(f"The ANGLE input-layout key patch does not match {path}")
+            data = data.replace(old, new)
+        updates.append((path, data))
+    # 两个文件都核对通过后再写入，避免只改一半导致声明与定义不一致。
+    for path, data in updates:
+        path.write_bytes(data)
+
+
 def patch_angle_arm64_toolset(source, visual_studio):
     redist = Path(visual_studio) / "VC/Redist/MSVC"
     candidates = sorted(redist.glob("*/arm64/Microsoft.VC*.CRT"),
@@ -341,6 +388,7 @@ def build_angle(rid, versions, work, output, jobs):
     depot = checkout(versions["depot_tools"], work / "depot_tools")
     source = checkout(versions["angle"], work / "angle")
     patch_angle(source)
+    patch_angle_input_layout_key(source)
     original_path = os.environ["PATH"]
     os.environ["PATH"] = str(depot) + os.pathsep + original_path
     os.environ.update(DEPOT_TOOLS_WIN_TOOLCHAIN="0", DEPOT_TOOLS_UPDATE="0")
