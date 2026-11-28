@@ -28,6 +28,7 @@ uses HarfBuzz 8.3.1.
 | --- | --- | --- |
 | Build Windows | Windows x64 and ARM64 | SkiaSharp, HarfBuzzSharp, ANGLE |
 | Build Linux | x64 and ARM64, built on Ubuntu 24.04 | SkiaSharp, HarfBuzzSharp |
+| Build Linux musl | x64 and ARM64, built on Alpine 3.22.2 (musl 1.2.5) | SkiaSharp, HarfBuzzSharp; GPU enabled, ICU disabled |
 | Build macOS | macOS 14+, arm64 and x64 | SkiaSharp, HarfBuzzSharp, Avalonia.Native |
 
 Run each workflow independently from Actions. Select an architecture and `all` or a single component
@@ -62,9 +63,26 @@ then run on the target OS:
 python scripts/build.py --rid linux-x64 --component all
 ```
 
-Build on the matching target OS and CPU architecture. Windows builds require
-an MSVC developer shell and LLVM 21.1.8 for x64 or 22.1.8 for ARM64. macOS
-builds require Xcode; ARM64 hosts also need Rosetta for the pinned Intel GN.
+Linux musl builds use the pinned Alpine 3.22.2 image and Docker on a matching
+architecture. For ARM64, use `linux/arm64` and `linux-musl-arm64`:
+
+```sh
+docker build --platform linux/amd64 -f tools/Dockerfile.musl -t avalonia-native-musl .
+docker run --rm --platform linux/amd64 -v "$PWD:/src" -w /src avalonia-native-musl \
+  python3 scripts/build.py --rid linux-musl-x64 --component all
+```
+
+The ZIP follows the other SDKs' `lib/`, `licenses/` and `manifest.json` layout.
+Use `link.skia.libs` from the manifest when linking statically with a musl
+compiler (for example, `clang++ -static-pie`). GPU APIs are enabled, but GPU
+drivers and EGL runtimes are not bundled; physical GPU acceleration is not
+validated. ICU is disabled. Fontconfig configuration and font files are runtime
+inputs and are not included in the ZIP.
+
+For other targets, build on the matching OS and CPU architecture.
+Windows builds require an MSVC developer shell and LLVM 21.1.8 for x64 or
+22.1.8 for ARM64. macOS builds require Xcode; ARM64 hosts also need Rosetta
+for the pinned Intel GN.
 Linux ARM64 builds compile the pinned GN source with the host toolchain. Generated
 sources and build outputs live under `.build/` and `artifacts/` and are ignored
 by Git. Before rebuilding the same target/component, move aside its previous

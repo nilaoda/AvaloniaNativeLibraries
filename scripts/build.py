@@ -9,8 +9,10 @@ import struct
 from pathlib import Path
 import re
 import shutil
+import shlex
 import subprocess
 import sys
+import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,7 +23,31 @@ COMPONENTS = {
     "linux-arm64": ("skia", "harfbuzz"),
     "osx-arm64": ("skia", "harfbuzz", "avalonia"),
     "osx-x64": ("skia", "harfbuzz", "avalonia"),
+    "linux-musl-x64": ("skia", "harfbuzz"),
+    "linux-musl-arm64": ("skia", "harfbuzz"),
 }
+MUSL_RIDS = frozenset(("linux-musl-x64", "linux-musl-arm64"))
+MUSL_ALPINE_IMAGE = "alpine:3.22.2@sha256:4b7ce07002c69e8f3d704a9c5d6fd3053be500b7f1c69fc0d80990c2ad8dd412"
+MUSL_STATIC_PIE_FLAGS = (
+    "-static-pie", "-Wl,--no-dynamic-linker", "-Wl,-z,text", "-Wl,-Bsymbolic")
+MUSL_STATIC_LINK_FLAGS = ("-static",)
+
+
+def target_architecture(rid):
+    return rid.rsplit("-", 1)[1]
+
+
+def host_rid(system, architecture, libc="glibc"):
+    if system == "linux" and libc == "musl":
+        return f"linux-musl-{architecture}"
+    return f"{system}-{architecture}"
+
+
+def gn_host_cxxflags(rid):
+    flags = ["-include cstdint", "-include limits"]
+    if rid in MUSL_RIDS:
+        flags.append("-D_LARGEFILE64_SOURCE")
+    return " ".join(flags)
 
 
 def run(*arguments, cwd=None, capture=False, env=None):
@@ -52,7 +78,7 @@ def checkout(source, directory):
 def skia_arguments(rid, versions):
     values = {
         "target_os": {"win": "win", "linux": "linux", "osx": "mac"}[rid.split("-")[0]],
-        "target_cpu": rid.split("-")[1],
+        "target_cpu": target_architecture(rid),
         "is_official_build": True,
         "is_static_skiasharp": True,
         "skia_enable_tools": False,
@@ -78,6 +104,8 @@ def skia_arguments(rid, versions):
                       skia_enable_fontmgr_win_gdi=False, skia_use_xps=False)
     else:
         values.update(cc="clang", cxx="clang++", skia_use_system_freetype2=False)
+        if rid in MUSL_RIDS:
+            values["extra_cflags"] = ["-march=x86-64" if target_architecture(rid) == "x64" else "-march=armv8-a"]
         if rid.startswith("osx-"):
             values.update(skia_use_metal=True, min_macos_version=versions["macos_deployment_target"],
                           extra_cflags=[f'-mmacosx-version-min={versions["macos_deployment_target"]}'])
@@ -134,7 +162,7 @@ def verify_archive_architecture(path, rid):
         if architecture is None:
             raise ValueError(f"Unknown object architecture: {path}/{name}")
         architectures.add(architecture)
-    if architectures != {rid.split("-")[1]}:
+    if architectures != {target_architecture(rid)}:
         raise ValueError(f"Static library architecture mismatch: {path}: {architectures}, expected {rid}")
 
 
@@ -208,6 +236,12 @@ def gn_link_metadata(gn, build_dir, label, source):
     return result
 
 
+def add_musl_static_fontconfig_dependencies(metadata):
+    flags = shlex.split(run("pkg-config", "--static", "--libs", "fontconfig", capture=True))
+    metadata["libs"] = list(dict.fromkeys([*metadata["libs"], *flags]))
+    return metadata
+
+
 def patch_macos_skia(source, deployment_target):
     patches = (
         (source / "third_party/externals/zlib/zutil.h",
@@ -245,15 +279,15 @@ def build_skia(rid, versions, work, output, jobs):
     patch_skia_headers(source)
     if rid.startswith("osx-"):
         patch_macos_skia(source, versions["macos_deployment_target"])
-    if rid == "linux-arm64":
-        # 旧版下载脚本只有 x64 GN；在 ARM64 上从固定源码构建宿主工具。
+    if rid == "linux-arm64" or rid in MUSL_RIDS:
+        # ARM64 和 musl 目标从固定源码构建可在宿主运行的 GN 工具。
         gn_source = checkout(versions["gn"], work / "gn")
         # GN 用初始标签和提交历史生成版本头文件。
         if run("git", "rev-parse", "--is-shallow-repository", cwd=gn_source, capture=True).strip() == "true":
             run("git", "fetch", "--unshallow", "origin", versions["gn"]["revision"], cwd=gn_source)
         run("git", "fetch", "origin", "tag", "initial-commit", cwd=gn_source)
         gn_output = gn_source / "out"
-        environment = dict(os.environ, CXX="clang++", CXXFLAGS="-include cstdint -include limits")
+        environment = dict(os.environ, CXX="clang++", CXXFLAGS=gn_host_cxxflags(rid))
         run(sys.executable, "build/gen.py", cwd=gn_source, env=environment)
         run("ninja", "-C", gn_output, "-j", jobs, cwd=gn_source)
         gn = gn_output / "gn"
@@ -267,9 +301,16 @@ def build_skia(rid, versions, work, output, jobs):
     filenames = ("skia.lib", "SkiaSharp.lib") if rid.startswith("win-") else ("libskia.a", "libSkiaSharp.a")
     for filename in filenames:
         copy_library(build_dir / filename, output)
+    if rid in MUSL_RIDS:
+        gpu_symbols = run("nm", "-C", "-g", output / "libskia.a", capture=True)
+        if "GrDirectContext::MakeGL(" not in gpu_symbols:
+            raise RuntimeError("The musl Skia archive does not contain the enabled Ganesh GL API")
     if rid.startswith("osx-"):
         expose_metal_entry_points(output / "libskia.a")
-    return gn_link_metadata(gn, build_dir, "//:SkiaSharp", source)
+    metadata = gn_link_metadata(gn, build_dir, "//:SkiaSharp", source)
+    if rid in MUSL_RIDS:
+        metadata = add_musl_static_fontconfig_dependencies(metadata)
+    return metadata
 
 
 def build_harfbuzz(rid, versions, work, output, jobs):
@@ -289,6 +330,8 @@ def build_harfbuzz(rid, versions, work, output, jobs):
         if rid.startswith("osx-"):
             compiler, sdk = macos_cpp_toolchain()
             flags = ["-isysroot", sdk, "-mmacosx-version-min=" + versions["macos_deployment_target"], "-arch", "arm64" if rid.endswith("-arm64") else "x86_64"]
+        elif rid in MUSL_RIDS:
+            flags = ["-march=x86-64" if target_architecture(rid) == "x64" else "-march=armv8-a"]
         run(compiler, "-c", "-O2", "-std=c++17", "-fPIC", "-fvisibility=hidden",
             "-fno-exceptions", "-fno-rtti", *flags,
             *(f"-I{path}" for path in include), *(f"-D{value}" for value in defines), unit, "-o", obj)
@@ -460,21 +503,61 @@ def verify(rid, components, output, metadata, versions, work):
         for framework in frameworks:
             link.extend(("-framework", framework.removesuffix(".framework")))
         if rid.startswith("linux-"):
-            link = ["-Wl,--start-group", *libraries, "-Wl,--end-group", *link,
-                    "-static-libstdc++", "-static-libgcc", "-ldl", "-lpthread"]
-            compiler = "g++"
+            static_flags = []
+            if rid in MUSL_RIDS:
+                static_flags.extend(MUSL_STATIC_PIE_FLAGS)
+            if rid in MUSL_RIDS:
+                link = [*static_flags, "-Wl,--start-group", *libraries, "-Wl,--end-group", *link,
+                        "-ldl", "-lpthread", *MUSL_STATIC_LINK_FLAGS]
+                compiler = "clang++"
+            else:
+                link = ["-Wl,--start-group", *libraries, "-Wl,--end-group", *link,
+                        "-static-libstdc++", "-static-libgcc", "-ldl", "-lpthread"]
+                compiler = "g++"
         else:
             compiler, sdk = macos_cpp_toolchain()
             link = [*libraries, *link, "-Wl,-ObjC", "-lc++", "-arch", "arm64" if rid.endswith("-arm64") else "x86_64",
                     "-isysroot", sdk, "-mmacosx-version-min=" + versions["macos_deployment_target"]]
-        run(compiler, "-O2", "-std=c++17", *("-D" + value for value in defines), ROOT / "native/smoke.cpp",
+        sources = [ROOT / "native/smoke.cpp"]
+        includes = []
+        if rid in MUSL_RIDS and "skia" in components:
+            defines.append("VERIFY_SKIA_RENDER")
+            sources.append(ROOT / "native/musl-smoke.cpp")
+            includes.extend(("-I", work / "skia"))
+        run(compiler, "-O2", "-std=c++17", *("-D" + value for value in defines), *includes, *sources,
             "-o", executable, *link)
         dependencies = run("readelf", "-d", executable, capture=True) if rid.startswith("linux-") else run("otool", "-L", executable, capture=True)
+        if rid in MUSL_RIDS:
+            headers = run("readelf", "-l", executable, capture=True)
+            elf = run("readelf", "-h", executable, capture=True)
+            if not re.search(r"(?m)^\s*Type:\s+DYN\s", elf):
+                raise RuntimeError("The musl smoke executable is not PIE")
+            if re.search(r"(?m)^\s*INTERP\s", headers):
+                raise RuntimeError("The musl smoke executable has a PT_INTERP segment")
+            needed_entries = [line for line in dependencies.splitlines() if "(NEEDED)" in line]
+            if needed_entries:
+                raise RuntimeError("The musl smoke executable has DT_NEEDED entries:\n" + "\n".join(needed_entries))
     for name in ("libSkiaSharp.so", "libSkiaSharp.dylib", "libSkiaSharp.dll", "libHarfBuzzSharp.so",
                  "libHarfBuzzSharp.dylib", "libHarfBuzzSharp.dll", "libAvaloniaNative.dylib", "av_libglesv2.dll"):
         if name.lower() in dependencies.lower():
             raise RuntimeError(f"Smoke executable unexpectedly depends on {name}")
-    result = run(executable, cwd=work, capture=True)
+    if rid in MUSL_RIDS:
+        trace = work / "native-smoke.trace"
+        result = run("strace", "-f", "-e", "trace=%file", "-o", trace, executable, cwd=work, capture=True)
+        accesses = trace.read_text(encoding="utf-8", errors="replace").splitlines()
+        dynamic_probes = [line for line in accesses if re.search(r"\.(?:so(?:\.|\b)|plugin\b)", line, re.IGNORECASE)]
+        loaded_dynamic = [line for line in dynamic_probes if re.search(r"\)\s+=\s+[0-9]+\b", line)]
+        if loaded_dynamic:
+            raise RuntimeError("The musl smoke program opened a shared library or plugin: " + loaded_dynamic[0])
+        if "skia" in components:
+            font_config = [line for line in accesses if "/etc/fonts/fonts.conf" in line and re.search(r"\)\s+=\s+[0-9]+\b", line)]
+            font_data = [line for line in accesses if "DejaVuSans.ttf" in line and re.search(r"\)\s+=\s+[0-9]+\b", line)]
+            if not font_config or not font_data:
+                raise RuntimeError("The musl text smoke did not load Fontconfig configuration and font data")
+            print("Musl smoke font inputs:", font_config[0], font_data[0], flush=True)
+        print("Musl smoke shared-library/plugin probes:", dynamic_probes or "none", flush=True)
+    else:
+        result = run(executable, cwd=work, capture=True)
     if "Native static libraries verified." not in result:
         raise RuntimeError("Native smoke test did not report success")
     print(result, flush=True)
@@ -530,12 +613,44 @@ def package(rid, components, versions, output, metadata, archive, work):
     manifest["build"] = {"script_sha256": file_hash(Path(__file__)), "python": sys.version,
                          "msvc": os.environ.get("VCToolsVersion"),
                          "windows_sdk": os.environ.get("WindowsSDKVersion")}
+    if rid in MUSL_RIDS:
+        manifest["build"]["musl_toolchain"] = {
+            "alpine_image": MUSL_ALPINE_IMAGE,
+            "alpine_release": Path("/etc/alpine-release").read_text(encoding="utf-8").strip(),
+            "musl_package": run("apk", "info", "-v", "musl", capture=True).strip(),
+            "apk_packages": sorted(run("apk", "info", "-v", capture=True).splitlines()),
+            "clang": run("clang", "--version", capture=True).splitlines()[0],
+            "clang_target": run("clang", "-dumpmachine", capture=True).strip(),
+            "cxx": run("clang++", "--version", capture=True).splitlines()[0],
+            "ninja": run("ninja", "--version", capture=True).strip(),
+            "gn_revision": versions["gn"]["revision"],
+            "skia_gn_args": skia_arguments(rid, versions),
+            "consumer_compiler": "clang++",
+            "consumer_link_flags": list(MUSL_STATIC_PIE_FLAGS),
+            "consumer_final_link_flags": list(MUSL_STATIC_LINK_FLAGS),
+            "harfbuzz_compile": {
+                "compiler": "clang++",
+                "standard": "c++17",
+                "optimization": "-O2",
+                "architecture": "-march=x86-64" if target_architecture(rid) == "x64" else "-march=armv8-a",
+                "exceptions": False,
+                "rtti": False,
+                "defines": ["HAVE_CONFIG_OVERRIDE_H", "HAVE_OT", "HB_NO_FALLBACK_SHAPE"],
+            },
+        }
     (output.parent / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
         for path in sorted(output.parent.rglob("*")):
             if path.is_file():
                 bundle.write(path, path.relative_to(output.parent))
     print("Packaged:", archive)
+
+
+def verify_packaged(rid, components, archive, metadata, versions, work):
+    with tempfile.TemporaryDirectory(prefix="avalonia-native-sdk-") as directory:
+        with zipfile.ZipFile(archive) as bundle:
+            bundle.extractall(directory)
+        verify(rid, components, Path(directory) / "lib", metadata, versions, work)
 
 
 def main():
@@ -557,7 +672,10 @@ def main():
     system = {"win32": "win", "linux": "linux", "darwin": "osx"}.get(sys.platform)
     machine = (os.environ.get("PROCESSOR_ARCHITEW6432") or platform.machine()).lower()
     architecture = {"amd64": "x64", "x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}.get(machine)
-    host = f"{system}-{architecture}"
+    libc = "glibc"
+    if system == "linux" and Path("/etc/alpine-release").is_file():
+        libc = "musl"
+    host = host_rid(system, architecture, libc)
     if args.rid != host:
         parser.error("Build on the target OS; cross-compilation is not configured")
     work = ROOT / ".build" / args.rid
@@ -570,9 +688,13 @@ def main():
     metadata = {}
     for component in components:
         metadata[component] = globals()["build_" + component](args.rid, versions, work, output, args.jobs)
-    verify(args.rid, components, output, metadata, versions, work)
     archive = stage.parent / f"avalonia-native-{args.rid}-{args.component}.zip"
-    package(args.rid, components, versions, output, metadata, archive, work)
+    if args.rid in MUSL_RIDS:
+        package(args.rid, components, versions, output, metadata, archive, work)
+        verify_packaged(args.rid, components, archive, metadata, versions, work)
+    else:
+        verify(args.rid, components, output, metadata, versions, work)
+        package(args.rid, components, versions, output, metadata, archive, work)
 
 
 if __name__ == "__main__":
