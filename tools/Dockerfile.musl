@@ -1,0 +1,42 @@
+FROM alpine:3.22.2@sha256:4b7ce07002c69e8f3d704a9c5d6fd3053be500b7f1c69fc0d80990c2ad8dd412
+
+RUN apk add --no-cache \
+    bash=5.2.37-r0 \
+    brotli-dev=1.1.1-r0 \
+    brotli-static=1.1.1-r0 \
+    build-base=0.5-r3 \
+    bzip2-dev=1.0.8-r6 \
+    bzip2-static=1.0.8-r6 \
+    clang20=20.1.8-r0 \
+    cmake=3.31.7-r1 \
+    curl=8.14.1-r4 \
+    expat-dev=2.11.0-r0 \
+    expat-static=2.11.0-r0 \
+    font-dejavu=2.37-r6 \
+    fontconfig-dev=2.15.0-r3 \
+    fontconfig-static=2.15.0-r3 \
+    freetype-static=2.13.3-r0 \
+    freetype-dev=2.13.3-r0 \
+    git=2.49.1-r0 \
+    libpng-dev=1.6.59-r0 \
+    libpng-static=1.6.59-r0 \
+    linux-headers=6.14.2-r0 \
+    mesa-dev=25.1.9-r0 \
+    musl=1.2.5-r13 \
+    musl-dev=1.2.5-r13 \
+    nasm=2.16.03-r0 \
+    ninja-build=1.12.1-r1 \
+    patch=2.8-r0 \
+    perl=5.40.4-r0 \
+    pkgconf=2.4.3-r0 \
+    python3=3.12.16-r0 \
+    strace=6.13-r0 \
+    zlib-dev=1.4-r0 \
+    zlib-static=1.4-r0
+
+RUN ln -s /usr/lib/ninja-build/bin/ninja /usr/local/bin/ninja \
+    && clang --version \
+    && clang++ --version \
+    && ninja --version
+
+WORKDIR /src

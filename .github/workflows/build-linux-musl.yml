@@ -1,0 +1,74 @@
+name: Build Linux musl
+run-name: ${{ github.workflow }} ${{ inputs.architecture }} (${{ inputs.component }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: Target architecture
+        type: choice
+        default: x64
+        options: [x64, arm64]
+      component:
+        description: Component to build and verify
+        type: choice
+        default: all
+        options: [all, skia, harfbuzz]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-musl-${{ github.ref }}-${{ inputs.architecture }}-${{ inputs.component }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ${{ inputs.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 180
+    env:
+      RID: linux-musl-${{ inputs.architecture }}
+      MUSL_IMAGE: avalonia-native-musl:alpine-3.22.2
+      CONTAINER_PLATFORM: ${{ inputs.architecture == 'arm64' && 'linux/arm64' || 'linux/amd64' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore native build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .build/${{ env.RID }}
+          key: native-musl-v2-${{ env.RID }}-${{ hashFiles('config/versions.json', 'tools/Dockerfile.musl') }}-${{ inputs.component }}-${{ github.run_id }}
+          restore-keys: native-musl-v2-${{ env.RID }}-${{ hashFiles('config/versions.json', 'tools/Dockerfile.musl') }}-${{ inputs.component }}-
+      - name: Build Alpine musl toolchain image
+        run: docker build --platform "$CONTAINER_PLATFORM" -f tools/Dockerfile.musl -t "$MUSL_IMAGE" .
+      - name: Check build configuration
+        run: |
+          docker run --rm --platform "$CONTAINER_PLATFORM" \
+            -v "$GITHUB_WORKSPACE:/src" -w /src "$MUSL_IMAGE" \
+            python3 -m unittest discover -s tests -p 'test_*.py'
+      - name: Build and verify static libraries
+        env:
+          COMPONENT: ${{ inputs.component }}
+        run: |
+          docker run --rm --platform "$CONTAINER_PLATFORM" \
+            --user "$(id -u):$(id -g)" --env HOME=/tmp \
+            -v "$GITHUB_WORKSPACE:/src" -w /src "$MUSL_IMAGE" \
+            python3 scripts/build.py --rid "$RID" --component "$COMPONENT"
+      - name: Run x64 static consumer on glibc host
+        if: inputs.architecture == 'x64'
+        run: |
+          readelf -l .build/linux-musl-x64/native-smoke
+          readelf -d .build/linux-musl-x64/native-smoke
+          .build/linux-musl-x64/native-smoke
+      - name: Upload Linux musl libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: avalonia-native-${{ env.RID }}-${{ inputs.component }}
+          path: artifacts/avalonia-native-${{ env.RID }}-${{ inputs.component }}.zip
+          if-no-files-found: error
+          retention-days: 7
+      - name: Save native build cache
+        if: always() && !cancelled()
+        uses: actions/cache/save@v4
+        with:
+          path: .build/${{ env.RID }}
+          key: native-musl-v2-${{ env.RID }}-${{ hashFiles('config/versions.json', 'tools/Dockerfile.musl') }}-${{ inputs.component }}-${{ github.run_id }}

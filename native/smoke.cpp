@@ -10,6 +10,9 @@ extern "C" void hb_version(unsigned*, unsigned*, unsigned*);
 extern "C" void* hb_buffer_create();
 extern "C" void hb_buffer_destroy(void*);
 #endif
+#ifdef VERIFY_SKIA_RENDER
+extern "C" int verify_skia_render();
+#endif
 #ifdef VERIFY_ANGLE
 extern "C" void* __stdcall EGL_GetProcAddress(const char*);
 #endif
@@ -24,6 +27,10 @@ int main()
     auto bitmap = sk_bitmap_new();
     if (!bitmap) return 2;
     sk_bitmap_destructor(bitmap);
+#endif
+#ifdef VERIFY_SKIA_RENDER
+    if (verify_skia_render() != 0)
+        return 7;
 #endif
 #ifdef VERIFY_HARFBUZZ
     unsigned major = 0, minor = 0, micro = 0;

@@ -23,6 +23,8 @@ class BuildConfigurationTests(unittest.TestCase):
             self.assertRegex(self.versions[name]["revision"], r"^[0-9a-f]{40}$")
         self.assertEqual("2.88.9", self.versions["skia"]["version"])
         self.assertEqual("8.3.1.1", self.versions["harfbuzz"]["binding_version"])
+        self.assertEqual(("skia", "harfbuzz"), build.COMPONENTS["linux-musl-x64"])
+        self.assertEqual(("skia", "harfbuzz"), build.COMPONENTS["linux-musl-arm64"])
 
     def test_static_skia_keeps_gpu_and_platform_compatibility(self):
         for rid in build.COMPONENTS:
@@ -34,7 +36,22 @@ class BuildConfigurationTests(unittest.TestCase):
             else:
                 self.assertFalse(arguments["skia_use_system_freetype2"])
         for rid in build.COMPONENTS:
-            self.assertEqual(rid.split("-")[1], build.skia_arguments(rid, self.versions)["target_cpu"])
+            self.assertEqual(build.target_architecture(rid), build.skia_arguments(rid, self.versions)["target_cpu"])
+        for rid in build.MUSL_RIDS:
+            arguments = build.skia_arguments(rid, self.versions)
+            self.assertTrue(arguments["skia_enable_gpu"])
+            self.assertFalse(arguments["skia_use_icu"])
+            self.assertEqual(["-march=x86-64" if rid.endswith("-x64") else "-march=armv8-a"],
+                             arguments["extra_cflags"])
+        for rid in ("linux-x64", "linux-arm64"):
+            self.assertNotIn("extra_cflags", build.skia_arguments(rid, self.versions))
+        self.assertIn("alpine:3.22.2@sha256:", build.MUSL_ALPINE_IMAGE)
+        self.assertEqual("linux-musl-arm64", build.host_rid("linux", "arm64", "musl"))
+        self.assertEqual("linux-x64", build.host_rid("linux", "x64", "glibc"))
+        self.assertIn("-D_LARGEFILE64_SOURCE", build.gn_host_cxxflags("linux-musl-arm64"))
+        self.assertNotIn("_LARGEFILE64_SOURCE", build.gn_host_cxxflags("linux-arm64"))
+        self.assertIn("-static-pie", build.MUSL_STATIC_PIE_FLAGS)
+        self.assertEqual(("-static",), build.MUSL_STATIC_LINK_FLAGS)
         mac = build.skia_arguments("osx-arm64", self.versions)
         self.assertEqual("arm64", mac["target_cpu"])
         self.assertEqual("14.0", mac["min_macos_version"])
